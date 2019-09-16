@@ -309,9 +309,9 @@ class VhDevice{
 		
 	}
 
-	remove(){
+	async remove(){
 
-		this._parent.remove(this);
+		await this._parent.remove(this);
 
 	}
 
@@ -332,7 +332,7 @@ class VhProgram{
 
 	}
 
-	// Accepts an array of ports to set
+	// Accepts an array of ports to set or an integer
 	setPorts( ports ){
 
 		if( !Array.isArray(ports) ){
@@ -398,14 +398,25 @@ class VhProgram{
 
 class VhStage{
 
-	constructor( settings ){
+	constructor( settings = {} ){
 
 		if( typeof settings !== "object" )
 			settings = {};
+
 		this.intensity = Math.max(0, Math.min(255, parseInt(settings.intensity))) || 0;
-		this.duration = parseInt(settings.duration);
+		if( settings.intensity instanceof VhRandObject )
+			this.intensity = settings.intensity;
+
+		this.duration = parseInt(settings.duration) || 0;
+		if( settings.duration instanceof VhRandObject )
+			this.duration = settings.duration;
+
 		this.easing = settings.easing || "Linear.None";
+
 		this.repeats = parseInt(settings.repeats) || 0;
+		if( settings.repeats instanceof VhRandObject )
+			this.repeats = settings.repeats;
+
 		this.yoyo = Boolean(settings.yoyo);
 
 	}
@@ -450,15 +461,15 @@ class VhStage{
 
 class VhRandObject{
 
-	constructor( settings ){
+	constructor( settings = {} ){
 		
 		if( typeof settings !== "object" )
 			settings = {};
 
-		this.min = isNaN(settings.min) ? null : Math.floor(settings.min);
-		this.max = isNaN(settings.max) ? null : Math.floor(settings.max);
-		this.offset = isNaN(settings.offset) ? null : Math.floor(settings.offset);
-		this.multi = isNaN(settings.multi) ? null : Math.floor(settings.multi);
+		this.min = Math.floor(settings.min) || 0;
+		this.max = Math.floor(settings.max) || 0;
+		this.offset = Math.floor(settings.offset) || 0;
+		this.multi = Math.floor(settings.multi) || 0;
 
 	}
 
