@@ -1,5 +1,5 @@
 /*
-	Copyright 2018-2019 JasX
+	Copyright 2018-2021 JasX
 	Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 	The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -13,16 +13,16 @@ class VhSocket{
 	// OVERRIDABLE EVENTS //
 
 	// A device connected to this app has come online or been added
-	onDeviceOnline( id, socket_id ){
+	onDeviceOnline( device ){
 
-		console.log("A device called", id, "has come online, id: ", socket_id);
+		console.log("The device", device, "has come online");
 
 	}
 
 	// A device connected to this app has gone offline
-	onDeviceOffline( id, socket_id ){
+	onDeviceOffline( device ){
 
-		console.log("A device called", id, "has gone offline, id:", socket_id);
+		console.log("The device ", device, "has gone offline");
 
 	}
 
@@ -37,6 +37,13 @@ class VhSocket{
 		;
 		console.log("Message received. Id:", id, "SID:", sid, "Task", task, "Val", val);
 
+	}
+
+	onConnected(){
+		console.log("Socket IO connected");
+	}
+	onDisconnected(){
+		console.log("Socket IO disconnected");
 	}
 	
 	// Raised 60 times per second
@@ -73,13 +80,16 @@ class VhSocket{
 		
 		await this._addScript();
 		this.socket = io(this.server);
-		this.socket.on('dev_online', data => this.onDeviceOnline.apply( this, data ));
-		this.socket.on('dev_offline', data => this.onDeviceOffline.apply( this, data ));
+		this.socket.on('dev_online', data => this.handleDeviceOnline(data));
+		this.socket.on('dev_offline', data => this.handleDeviceOffline(data));
 		this.socket.on('aCustom', data => this.onCustomMessage.apply( this, data ));
-		
+		this.socket.on('disconnect', () => this.onDisconnected());
+
 		await new Promise(res => {
 			this.socket.on('connect', res);
 		});
+
+		this.onConnected();
 		
 		const success = await this.setName();
 		if( !success )
@@ -117,6 +127,39 @@ class VhSocket{
 
 		}
 		this.devices = out;	// Update our array of devices.
+
+	}
+
+	handleDeviceOnline( data ){
+		
+		const id = data[0],
+			socket = data[1],
+			meta = data[2]
+		;
+
+		let device = this.getDevice(id);
+		if( !device ){
+			console.debug("Device online received with invalid data");
+			return;
+		}
+
+		device.online = true;
+		device.socket = socket;
+		device.loadMeta(meta);	
+
+		this.onDeviceOnline( device );
+
+	}
+
+	handleDeviceOffline( data ){
+
+		const id = data[0];
+		let device = this.getDevice(id);
+		if( !device )
+			device = new VhDevice(id, this);	// It's asynchronous, so you can't rely on always having a device
+
+		device.online = false;
+		this.onDeviceOffline( device );
 
 	}
 
@@ -170,6 +213,7 @@ class VhSocket{
 
 	}
 
+
 	// Returs a device by deviceID or undefined if not found
 	getDevice( deviceID ){
 
@@ -189,6 +233,19 @@ class VhSocket{
 		for( let pwm of device.pwm )
 			out += (+pwm).toString(16).padStart(2,'0');
 		this.socket.emit('p', out);	// Send the hex to the VibHub device!
+
+	}
+
+	sendSingleChannelPWM( device, ...channels ){
+
+		const ch = [...channels];
+		let out = device.index.toString(16).padStart(2,'0');					// Device index
+		for( let channel of ch ){
+			out += parseInt(channel).toString(16).padStart(2, '0');					// Channel
+			out += parseInt(device.pwm[channel]).toString(16).padStart(2, '0');		// Intensity
+		}
+		console.log("emitting", out);
+		this.socket.emit('ps', out);
 
 	}
 
@@ -250,18 +307,50 @@ class VhSocket{
 
 class VhDevice{
 
-	constructor( id, parent ){
+	constructor( deviceID, parent ){
 
-		this.id = id;
+		this.id = deviceID;
 		this.index = 0;
+		this.socket = '';	// Can be used for direct communication?
+
 		this.pwm = [0,0,0,0];
 		this._pwm = [0,0,0,0];
 		this._parent = parent;
+
+		this.online = false;
+		this.numPorts = 0;
+		this.version = '';
+		this.custom = '';
+		this.hwversion = '';
+		this.capabilities = {};
+
+	}
+
+	loadMeta( data ){
+
+		if( parseInt(data.numPorts) )
+			this.numPorts = parseInt(data.numPorts);	
+		
+		if( data.version )
+			this.version = String(data.version);		
+		
+		if( data.custom )
+			this.custom = String(data.custom);
+
+		if( data.hwversion )
+			this.hwversion = String(data.hwversion);
+
+		if( typeof data.capabilities === "object" && data.capabilities )
+			this.capabilities = data.capabilities;	
 
 	}
 
 	sendPWM(){
 		this._parent.sendPWM( this );
+	}
+
+	sendSingleChannelPWM( ...channels ){
+		this._parent.sendSingleChannelPWM( this, ...channels );
 	}
 
 	sendProgram( program ){
