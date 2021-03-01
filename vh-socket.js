@@ -118,7 +118,7 @@ class VhSocket{
 		for( let i in devices ){
 
 			const device = devices[i];
-			let ex = this.getDevice(device, this);
+			let ex = this.getDevice(device);
 			if( !ex )
 				ex = new VhDevice(device, this);
 
