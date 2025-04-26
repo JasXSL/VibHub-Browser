@@ -9,7 +9,6 @@
 class VhSocket{
 
 
-
 	// OVERRIDABLE EVENTS //
 
 	// A device connected to this app has come online or been added
@@ -23,6 +22,12 @@ class VhSocket{
 	onDeviceOffline( device ){
 
 		console.log("The device ", device, "has gone offline");
+
+	}
+
+	onDeviceBattery( device ){
+
+		console.log("The device", device, "reports battery mV", device.batteryMillivolts, "and low voltage: ", device.batteryLow);
 
 	}
 
@@ -52,12 +57,10 @@ class VhSocket{
 
 
 
-
-
 	// CODE BEGINS HERE //
 
 	// Internal stuff here
-	constructor( appName, server = "https://vibhub.io", port = 443, fps = 30 ){
+	constructor( appName, server = "https://vibhub.io", port = 443, fps = 30, autoUpdateBatteryFreq = 30e3 ){
 		
 		this.appName = appName;
 		this.server = server;
@@ -66,9 +69,12 @@ class VhSocket{
 		this.devices = [];
 		this.socket = null;
 		this.ticker = null;
+		this.connected = false;
+		this.autoUpdateBatteryFreq = autoUpdateBatteryFreq;
+		this.batTicker = null;
 
 		while( this.server[this.server.length-1] === '/' )
-			this.server = this.server.substr(0, this.server.length-1);
+			this.server = this.server.substring(0, this.server.length-1);
 
 	}
 
@@ -83,21 +89,31 @@ class VhSocket{
 		this.socket.on('dev_online', data => this.handleDeviceOnline(data));
 		this.socket.on('dev_offline', data => this.handleDeviceOffline(data));
 		this.socket.on('aCustom', data => this.onCustomMessage.apply( this, data ));
-		this.socket.on('disconnect', () => this.onDisconnected());
+		this.socket.on('disconnect', () => {
+			this.connected = false;
+			this.onDisconnected();
+		});
+		this.socket.on('sb', data => this.handleDeviceBattery(data));
 
 		await new Promise(res => {
 			this.socket.on('connect', res);
 		});
 
+		this.connected = true;
 		this.onConnected();
 		
 		const success = await this.setName();
 		if( !success )
 			throw 'Unable to set name. Make sure the server is up to date!';
 		
-		this.ticker = setInterval(() => this.tick(), 1000.0/this.fps);
+		this.ticker = setInterval(this.tick.bind(this), 1000.0/this.fps);
+		if( this.autoUpdateBatteryFreq > 0 )
+			this.batTicker = setInterval(this.batTick.bind(this), this.autoUpdateBatteryFreq);
 
-
+	}
+	
+	isConnected(){
+		return this.connected;
 	}
 
 	// Sends our app name to the server
@@ -118,7 +134,7 @@ class VhSocket{
 		for( let i in devices ){
 
 			const device = devices[i];
-			let ex = this.getDevice(device);
+			let ex = this.getDevice(device, this);
 			if( !ex )
 				ex = new VhDevice(device, this);
 
@@ -142,12 +158,14 @@ class VhSocket{
 			console.debug("Device online received with invalid data");
 			return;
 		}
-
 		device.online = true;
 		device.socket = socket;
-		device.loadMeta(meta);	
+		device.loadMeta(meta);
 
 		this.onDeviceOnline( device );
+
+		if( device.hasBatteryStatus() )
+			this.getBattery(device);
 
 	}
 
@@ -163,10 +181,26 @@ class VhSocket{
 
 	}
 
+	handleDeviceBattery( data ){
+
+		const id = data.id;
+		let device = this.getDevice(id);
+		if( !device )
+			device = new VhDevice(id, this);	// It's asynchronous, so you can't rely on always having a device
+		device.batteryLow = data.low;
+		device.batteryMillivolts = data.mv;
+		device.batteryMaxMillivolts = data.xv;
+		console.log("Battery data", data);
+		this.onDeviceBattery( device );
+
+	}
+
 	// This method lets us add one or more devices. deviceID is the device ID you get from your VibHub device
 	// deviceID can be either a string or an array of strings
 	// resolves with a VhDevice object
 	async addDevice( deviceID ){
+		if( !this.socket )
+			return;
 
 		return await new Promise(res => {
 
@@ -200,6 +234,9 @@ class VhSocket{
 	// Clears all devices
 	async wipeDevices(){
 
+		if( !this.socket )
+			return;
+
 		return await new Promise(res => {
 
 			this.socket.emit('hookdown', [], () => {
@@ -231,7 +268,7 @@ class VhSocket{
 		
 		let out = device.index.toString(16).padStart(2,'0');		// Creates and sends a hex string
 		for( let pwm of device.pwm )
-			out += (+pwm).toString(16).padStart(2,'0');
+			out += device.calcMinPwm(+pwm).toString(16).padStart(2,'0');
 		this.socket.emit('p', out);	// Send the hex to the VibHub device!
 
 	}
@@ -242,9 +279,8 @@ class VhSocket{
 		let out = device.index.toString(16).padStart(2,'0');					// Device index
 		for( let channel of ch ){
 			out += parseInt(channel).toString(16).padStart(2, '0');					// Channel
-			out += parseInt(device.pwm[channel]).toString(16).padStart(2, '0');		// Intensity
+			out += device.calcMinPwm(device.pwm[channel]).toString(16).padStart(2, '0');		// Intensity
 		}
-		console.log("emitting", out);
 		this.socket.emit('ps', out);
 
 	}
@@ -258,7 +294,14 @@ class VhSocket{
 		this.socket.emit('GET', {
 			id : device.id,
 			type : "vib",
-			data : [program.export()]
+			data : [program.export(device)]
+		});
+
+	}
+	getBattery( device ){
+
+		this.socket.emit("gb", {
+			id : device.id,
 		});
 
 	}
@@ -280,6 +323,19 @@ class VhSocket{
 				this.sendPWM(device);
 
 			}
+
+		}
+
+	}
+
+	batTick(){
+
+		for( let device of this.devices ){
+
+			if( !device.hasBatteryStatus() )
+				continue;
+
+			this.getBattery(device);
 
 		}
 
@@ -307,6 +363,16 @@ class VhSocket{
 
 class VhDevice{
 
+	static CapabilityNames = {
+		p : 'pwm batch',
+		ps : 'pwm specific',
+		vib : 'programs',
+		sb : 'battery status',
+		app_offline : 'offline capabilities',
+		dCustom : 'custom tasks',
+		aCustom : 'custom events',
+	};
+
 	constructor( deviceID, parent ){
 
 		this.id = deviceID;
@@ -318,11 +384,15 @@ class VhDevice{
 		this._parent = parent;
 
 		this.online = false;
+		this.batteryLow = false;
+		this.batteryMillivolts = 0;
+		this.batteryMaxMillivolts = 0;
 		this.numPorts = 0;
 		this.version = '';
 		this.custom = '';
 		this.hwversion = '';
 		this.capabilities = {};
+		this.minPwm = 0;				// Since devices generally need a duty cycle of like 100 to just about start to turn on, we will have programs auto recalculated to this min value unless the program value is 0.
 
 	}
 
@@ -345,6 +415,63 @@ class VhDevice{
 
 	}
 
+	calcMinPwm( input ){
+
+		input = Math.trunc(input);
+		if( input < 1 )
+			return 0;
+		
+		let perc = input/255;
+		const range = 255-this.minPwm;
+		return Math.trunc(perc*range+this.minPwm);
+
+	}
+
+	// These 3 are supported on all devices we've put out. So if capabilities are empty, we can assume they are supported
+	// Send vibrations directly on ALL ports
+	hasCapPwmBasic(){
+		return this.capabilities.p || !Object.keys(this.capabilities).length; 
+	}
+	// Set vibrations on specific ports
+	hasCapPwmSpecific(){
+		return this.capabilities.ps || !Object.keys(this.capabilities).length; 
+	}
+	// Run programs
+	hasCapPrograms(){
+		return this.capabilities.vib || !Object.keys(this.capabilities).length;
+	}
+	// Can do stuff while offline. Afaik, none of our devices support this. Only custom ones.
+	hasCapOffline(){
+		return this.capabilities.app_offline;
+	}
+	// Has a handler for custom methods sent from app to device
+	hasCustomToDevice(){
+		return this.capabilities.dCustom;
+	}
+	// Has a handler for custom methods sent from device to app
+	hasCustomToApp(){
+		return this.capabilities.aCustom;
+	}
+	// Has battery level and low power output
+	hasBatteryStatus(){
+		return this.capabilities.sb;
+	}
+
+
+	getCapabilityNames(){
+
+		let out = [];
+		for( let cap in this.capabilities ){
+
+			if( VhDevice.CapabilityNames[cap] )
+				out.push( VhDevice.CapabilityNames[cap] );
+
+		}
+		return out;
+		
+	}
+
+
 	sendPWM(){
 		this._parent.sendPWM( this );
 	}
@@ -355,6 +482,13 @@ class VhDevice{
 
 	sendProgram( program ){
 		this._parent.sendProgram( this, program );
+	}
+
+	// Attempts to fetch battery status
+	getBattery(){
+
+		this._parent.getBattery( this );
+
 	}
 
 	// Checks if PWM has changed. If stash is true, it stashes changes detected 
@@ -396,6 +530,11 @@ class VhDevice{
 			
 		}
 		
+	}
+
+	setMinPwm( amt = 0 ){
+		this.minPwm = Math.trunc(amt) || 0;
+		this.minPwm = Math.min(255, Math.max(0, this.minPwm));
 	}
 
 	async remove(){
@@ -452,7 +591,7 @@ class VhProgram{
 
 	}
 
-	export(){
+	export( device ){
 
 		const out = {
 			stages : []
@@ -471,7 +610,7 @@ class VhProgram{
 			if( typeof stage !== "object" || typeof stage.export !== "function" )
 				throw "A stage is not a proper object";
 
-			let ex = stage.export();
+			let ex = stage.export(device);
 			if( typeof ex !== "object" )
 				throw "Invalid stage export";
 
@@ -522,7 +661,7 @@ class VhStage{
 
 	}
 
-	export(){
+	export( device ){
 
 		let out = {};
 		if( typeof this.intensity === "boolean" )
@@ -541,6 +680,9 @@ class VhStage{
 		
 		if( this.yoyo )
 			out.y = this.yoyo;
+
+		if( device instanceof VhDevice )
+			out.i = device.calcMinPwm(out.i);
 
 		return out;
 
