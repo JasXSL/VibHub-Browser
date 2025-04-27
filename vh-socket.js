@@ -60,7 +60,7 @@ class VhSocket{
 	// CODE BEGINS HERE //
 
 	// Internal stuff here
-	constructor( appName, server = "https://vibhub.io", port = 443, fps = 30, autoUpdateBatteryFreq = 30e3 ){
+	constructor( appName, server = "https://vibhub.io", port = 443, fps = 30, autoUpdateBatteryFreq = 30e3, autoHighRes = false ){
 		
 		this.appName = appName;
 		this.server = server;
@@ -72,6 +72,7 @@ class VhSocket{
 		this.connected = false;
 		this.autoUpdateBatteryFreq = autoUpdateBatteryFreq;
 		this.batTicker = null;
+		this.autoHighRes = autoHighRes;
 
 		while( this.server[this.server.length-1] === '/' )
 			this.server = this.server.substring(0, this.server.length-1);
@@ -135,9 +136,12 @@ class VhSocket{
 
 			const device = devices[i];
 			let ex = this.getDevice(device, this);
-			if( !ex )
+			if( !ex ){
 				ex = new VhDevice(device, this);
-
+				if( this.autoHighRes )
+					device.setHiRes(true);
+				
+			}
 			ex.index = parseInt(i);
 			out.push(ex);
 
@@ -190,7 +194,6 @@ class VhSocket{
 		device.batteryLow = data.low;
 		device.batteryMillivolts = data.mv;
 		device.batteryMaxMillivolts = data.xv;
-		console.log("Battery data", data);
 		this.onDeviceBattery( device );
 
 	}
@@ -316,7 +319,6 @@ class VhSocket{
 			data : [prog],
 			highres : device.isHighRes(),
 		});
-		console.log("Sending program", prog);
 
 	}
 	getBattery( device ){
@@ -393,7 +395,7 @@ class VhDevice{
 		app_offline : 'offline capabilities',
 		dCustom : 'custom tasks',
 		aCustom : 'custom events',
-
+		h : 'high resolution'
 	};
 
 	constructor( deviceID, parent ){
@@ -735,6 +737,7 @@ class VhStage{
 		if( typeof out.i === "number" ){
 			out.i = device.calcMinPwm(out.i);
 			out.i *= device._maxVal;
+			out.i = Math.round(out.i);
 		}
 
 		return out;
