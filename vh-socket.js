@@ -60,7 +60,7 @@ class VhSocket{
 	// CODE BEGINS HERE //
 
 	// Internal stuff here
-	constructor( appName, server = "https://vibhub.io", port = 443, fps = 30, autoUpdateBatteryFreq = 30e3, autoHighRes = false ){
+	constructor( appName, server = "https://vibhub.io", port = 443, fps = 30, autoHighRes = false ){
 		
 		this.appName = appName;
 		this.server = server;
@@ -70,8 +70,6 @@ class VhSocket{
 		this.socket = null;
 		this.ticker = null;
 		this.connected = false;
-		this.autoUpdateBatteryFreq = autoUpdateBatteryFreq;
-		this.batTicker = null;
 		this.autoHighRes = autoHighRes;
 
 		while( this.server[this.server.length-1] === '/' )
@@ -108,8 +106,6 @@ class VhSocket{
 			throw 'Unable to set name. Make sure the server is up to date!';
 		
 		this.ticker = setInterval(this.tick.bind(this), 1000.0/this.fps);
-		if( this.autoUpdateBatteryFreq > 0 )
-			this.batTicker = setInterval(this.batTick.bind(this), this.autoUpdateBatteryFreq);
 
 	}
 	
@@ -346,19 +342,6 @@ class VhSocket{
 				this.sendPWM(device);
 
 			}
-
-		}
-
-	}
-
-	batTick(){
-
-		for( let device of this.devices ){
-
-			if( !device.hasBatteryStatus() )
-				continue;
-
-			this.getBattery(device);
 
 		}
 
