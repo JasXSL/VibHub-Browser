@@ -263,23 +263,41 @@ class VhSocket{
 
 	}
 
-	// Updates the vibration strength of a device's ports (0-255)
+	// Updates the vibration strength of a device's ports
 	sendPWM( device ){
 		
-		let out = device.index.toString(16).padStart(2,'0');		// Creates and sends a hex string
-		for( let pwm of device.pwm )
-			out += device.calcMinPwm(+pwm).toString(16).padStart(2,'0');
+		let out = device.index.toString(16).padStart(2,'0'), // Start with the device index. This gets shifted off by the server.
+			numChars = 2
+		;
+		if( device.isHighRes() ){
+			out += '01'; // Add a single byte with bitwise value 0x01 to mark as high res (2 bytes per channel)
+			numChars += 2;
+		}
+
+
+		for( let i = 0; i < device.numPorts; ++i )	// Add the intensitydevice.pwm )
+			out += device.getChannelVal(i).toString(16).padStart(numChars,'0');
+
 		this.socket.emit('p', out);	// Send the hex to the VibHub device!
 
 	}
 
 	sendSingleChannelPWM( device, ...channels ){
 
-		const ch = [...channels];
+		const ch = [...channels];		
+
 		let out = device.index.toString(16).padStart(2,'0');					// Device index
 		for( let channel of ch ){
-			out += parseInt(channel).toString(16).padStart(2, '0');					// Channel
-			out += device.calcMinPwm(device.pwm[channel]).toString(16).padStart(2, '0');		// Intensity
+
+			let ch = parseInt(channel) || 0;
+			const highRes = device.isHighRes();
+			if( highRes )
+				ch = ch|0x80; // Mark data as high res
+			
+			out += ch.toString(16).padStart(2, '0');					// Channel
+			const numChars = 2 + (highRes*2);
+			out += device.getChannelVal().toString(16).padStart(numChars, '0').substring(0,numChars);		// Intensity
+			
 		}
 		this.socket.emit('ps', out);
 
@@ -291,11 +309,14 @@ class VhSocket{
 		if( typeof program !== "object" || typeof program.export !== "function" )
 			throw "Program is invalid";
 
+		const prog = program.export(device);
 		this.socket.emit('GET', {
 			id : device.id,
 			type : "vib",
-			data : [program.export(device)]
+			data : [prog],
+			highres : device.isHighRes(),
 		});
+		console.log("Sending program", prog);
 
 	}
 	getBattery( device ){
@@ -366,11 +387,13 @@ class VhDevice{
 	static CapabilityNames = {
 		p : 'pwm batch',
 		ps : 'pwm specific',
+		ph : 'pwm specific high res',
 		vib : 'programs',
 		sb : 'battery status',
 		app_offline : 'offline capabilities',
 		dCustom : 'custom tasks',
 		aCustom : 'custom events',
+
 	};
 
 	constructor( deviceID, parent ){
@@ -379,8 +402,8 @@ class VhDevice{
 		this.index = 0;
 		this.socket = '';	// Can be used for direct communication?
 
-		this.pwm = [0,0,0,0];
-		this._pwm = [0,0,0,0];
+		this.pwm = [0,0,0,0];		// Floats
+		this._pwm = [0,0,0,0];		// 16 bit values
 		this._parent = parent;
 
 		this.online = false;
@@ -392,8 +415,23 @@ class VhDevice{
 		this.custom = '';
 		this.hwversion = '';
 		this.capabilities = {};
-		this.minPwm = 0;				// Since devices generally need a duty cycle of like 100 to just about start to turn on, we will have programs auto recalculated to this min value unless the program value is 0.
+		this.minPwm = 0;				// Float. Since devices generally need a duty cycle of like 100 to just about start to turn on, we will have programs auto recalculated to this min value unless the program value is 0.
+		this._maxVal = 255;				// Cache of max val
+		
+	}
 
+	// Enables high res mode
+	setHighRes( on = true ){
+
+		const hrb = this.getHiResBits();
+		this._maxVal = Math.pow(2, hrb)-1;
+		if( !hrb || !on )
+			this._maxVal = 255;			
+
+	}
+	
+	isHighRes(){
+		return this._maxVal !== 255;
 	}
 
 	loadMeta( data ){
@@ -415,15 +453,17 @@ class VhDevice{
 
 	}
 
+	// Gets channel val taking min/max, and max val into consideration
+	getChannelVal( ch = 0 ){
+
+		return Math.trunc(this.calcMinPwm(this.pwm[ch])*this._maxVal);
+
+	}
+
 	calcMinPwm( input ){
 
-		input = Math.trunc(input);
-		if( input < 1 )
-			return 0;
-		
-		let perc = input/255;
-		const range = 255-this.minPwm;
-		return Math.trunc(perc*range+this.minPwm);
+		input = Math.abs(input) || 0;
+		return (input*(1.0-this.minPwm))+this.minPwm;
 
 	}
 
@@ -455,6 +495,10 @@ class VhDevice{
 	// Has battery level and low power output
 	hasBatteryStatus(){
 		return this.capabilities.sb;
+	}
+	// Gets hi res cability bit size. Returns 0 if no high res capability is available
+	getHiResBits(){
+		return Math.trunc(this.capabilities.h) || 0; 
 	}
 
 
@@ -496,7 +540,8 @@ class VhDevice{
 
 		for( let i in this.pwm ){
 			
-			if( this.pwm[i] != this._pwm[i] ){
+			const val = this.pwm[i]*0xFFFF;
+			if( val != this._pwm[i] ){
 				
 				if( stash )
 					this.stashChange();
@@ -511,19 +556,20 @@ class VhDevice{
 	// Syncs _pwm to pwm
 	stashChange(){
 
-		this._pwm = this.pwm.slice();
+		this._pwm = this.pwm.map(el => el*0xFFFF); // Convert to 16 bit values
 
 	}
 
 	set( val = 0, channel = -1 ){
-		
+		val = Math.abs(val);
 		if( isNaN(val) )
 			throw "Value is NaN";
 
 		channel = parseInt(channel);
 
-		val = Math.max(0, Math.min(255, parseInt(val)));
-		for( let i=0; i<this.pwm.length; ++i ){
+		val = Math.max(0, Math.min(1, val));
+
+		for( let i = 0; i < this.pwm.length; ++i ){
 			
 			if( channel === -1 || channel === i )
 				this.pwm[i] = val;
@@ -533,8 +579,10 @@ class VhDevice{
 	}
 
 	setMinPwm( amt = 0 ){
-		this.minPwm = Math.trunc(amt) || 0;
-		this.minPwm = Math.min(255, Math.max(0, this.minPwm));
+		
+		this.minPwm = Math.abs(amt) || 0;
+		this.minPwm = Math.min(1, Math.max(0, this.minPwm));
+
 	}
 
 	async remove(){
@@ -626,12 +674,14 @@ class VhProgram{
 
 class VhStage{
 
+
 	constructor( settings = {} ){
 
 		if( typeof settings !== "object" )
 			settings = {};
 
-		this.intensity = Math.max(0, Math.min(255, parseInt(settings.intensity))) || 0;
+		// Intensity is stored as 16 bit internally
+		this.intensity = Math.max(0, Math.min(1, settings.intensity)) || 0;
 		if( settings.intensity instanceof VhRandObject )
 			this.intensity = settings.intensity;
 
@@ -649,13 +699,13 @@ class VhStage{
 
 	}
 
-	exportIntOrRand( v ){
+	exportFloatOrRand( v, device ){
 		
 		if( typeof v === "object" && typeof v.export === "function" )
-			return v.export();
+			return v.export(device);
 
 		if( !isNaN(v) )
-			return Math.floor(v);
+			return Math.abs(v);
 			
 		return 0;
 
@@ -667,13 +717,13 @@ class VhStage{
 		if( typeof this.intensity === "boolean" )
 			out.i = this.intensity;
 		else if( this.intensity )
-			out.i = this.exportIntOrRand(this.intensity);
+			out.i = this.exportFloatOrRand(this.intensity, device);
 
 		if( this.repeats )
-			out.r = this.exportIntOrRand(this.repeats);
+			out.r = this.exportFloatOrRand(this.repeats, device);
 
 		if( this.duration )
-			out.d = this.exportIntOrRand(this.duration);
+			out.d = this.exportFloatOrRand(this.duration, device);
 
 		if( typeof this.easing === "string" && this.easing !== "Linear.None" )
 			out.e = this.easing;
@@ -681,8 +731,11 @@ class VhStage{
 		if( this.yoyo )
 			out.y = this.yoyo;
 
-		if( device instanceof VhDevice )
+		// Numeric needs to adhere to device rules
+		if( typeof out.i === "number" ){
 			out.i = device.calcMinPwm(out.i);
+			out.i *= device._maxVal;
+		}
 
 		return out;
 
@@ -697,22 +750,22 @@ class VhRandObject{
 		if( typeof settings !== "object" )
 			settings = {};
 
-		this.min = Math.floor(settings.min) || 0;
-		this.max = Math.floor(settings.max) || 0;
-		this.offset = Math.floor(settings.offset) || 0;
-		this.multi = Math.floor(settings.multi) || 0;
+		this.min = (+settings.min) || 0;
+		this.max = (+settings.max) || 0;
+		this.offset = (+settings.offset) || 0;
+		this.multi = (+settings.multi) || 0;
 
 	}
 
-	export(){
+	export( device ){
 
 		let out = {};
 		if( this.min !== null )
-			out.min = this.min;
+			out.min = device.calcMinPwm(this.min)*device._maxVal || 0;
 		if( this.max !== null )
-			out.max = this.max;
+			out.max = device.calcMinPwm(this.max)*device._maxVal || 0;
 		if( this.offset !== null )
-			out.offset =  this.offset;
+			out.offset = this.offset;
 		if( this.multi !== null )
 			out.multi = this.multi;
 		return out;
