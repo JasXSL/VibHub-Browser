@@ -81,7 +81,7 @@ class VhSocket{
 	async begin(){
 
 		if( this.socket )
-			throw 'Only call begin once';
+			throw new Error('Only call begin once');
 		
 		await this._addScript();
 		this.socket = io(this.server);
@@ -103,9 +103,10 @@ class VhSocket{
 		
 		const success = await this.setName();
 		if( !success )
-			throw 'Unable to set name. Make sure the server is up to date!';
+			throw new Error('Unable to set name. Make sure the server is up to date!');
 		
 		this.ticker = setInterval(this.tick.bind(this), 1000.0/this.fps);
+		return this;
 
 	}
 	
@@ -306,7 +307,7 @@ class VhSocket{
 	sendProgram( device, program ){
 		
 		if( typeof program !== "object" || typeof program.export !== "function" )
-			throw "Program is invalid";
+			throw new Error("Program is invalid");
 
 		const prog = program.export(device);
 		this.socket.emit('GET', {
@@ -412,6 +413,7 @@ class VhDevice{
 		this._maxVal = Math.pow(2, hrb)-1;
 		if( !hrb || !on )
 			this._maxVal = 255;			
+		return this;
 
 	}
 	
@@ -548,7 +550,7 @@ class VhDevice{
 	set( val = 0, channel = -1 ){
 		val = Math.abs(val);
 		if( isNaN(val) )
-			throw "Value is NaN";
+			throw new Error("Value is NaN");
 
 		channel = parseInt(channel);
 
@@ -635,17 +637,17 @@ class VhProgram{
 			out.repeats = this.repeats;
 
 		if( !Array.isArray(this.stages) )
-			throw "Program stages is not an array";
+			throw new Error("Program stages is not an array");
 		
 		
 		for( let stage of this.stages ){
 
 			if( typeof stage !== "object" || typeof stage.export !== "function" )
-				throw "A stage is not a proper object";
+				throw new Error("A stage is not a proper object");
 
 			let ex = stage.export(device);
 			if( typeof ex !== "object" )
-				throw "Invalid stage export";
+				throw new Error("Invalid stage export");
 
 			out.stages.push(ex);
 
@@ -739,7 +741,8 @@ class VhRandObject{
 		this.min = (+settings.min) || 0;
 		this.max = (+settings.max) || 0;
 		this.offset = (+settings.offset) || 0;
-		this.multi = (+settings.multi) || 0;
+		this.multi = isNaN(settings.multi) ? 1 : +settings.multi;
+		this.absolute = false;
 
 	}
 
@@ -747,13 +750,15 @@ class VhRandObject{
 
 		let out = {};
 		if( this.min !== null )
-			out.min = device.calcMinPwm(this.min)*device._maxVal || 0;
+			out.min = this.absolute ? this.min : device.calcMinPwm(this.min)*device._maxVal || 0;
 		if( this.max !== null )
-			out.max = device.calcMinPwm(this.max)*device._maxVal || 0;
+			out.max = this.absolute ? this.max : device.calcMinPwm(this.max)*device._maxVal || 0;
+
 		if( this.offset !== null )
 			out.offset = this.offset;
 		if( this.multi !== null )
 			out.multi = this.multi;
+
 		return out;
 
 	}
