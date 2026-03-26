@@ -8,6 +8,7 @@
 
 class VhSocket{
 
+	static DEFAULT_SERVER = "https://vibhub.io";
 
 	// OVERRIDABLE EVENTS //
 
@@ -60,8 +61,11 @@ class VhSocket{
 	// CODE BEGINS HERE //
 
 	// Internal stuff here
-	constructor( appName, server = "https://vibhub.io", port = 443, fps = 30, autoHighRes = false ){
+	constructor( appName, server, port = 443, fps = 30, autoHighRes = false ){
 		
+		if( !server )
+			server = VhSocket.DEFAULT_SERVER;
+
 		this.appName = appName;
 		this.server = server;
 		this.port = port;
@@ -134,9 +138,10 @@ class VhSocket{
 			const device = devices[i];
 			let ex = this.getDevice(device, this);
 			if( !ex ){
+
 				ex = new VhDevice(device, this);
 				if( this.autoHighRes )
-					device.setHiRes(true);
+					ex.setHighRes(true);
 				
 			}
 			ex.index = parseInt(i);
@@ -392,6 +397,7 @@ class VhDevice{
 		this._pwm = [0,0,0,0];		// 16 bit values
 		this._parent = parent;
 
+		this.highRes = false;
 		this.online = false;
 		this.batteryLow = false;
 		this.batteryMillivolts = 0;
@@ -409,11 +415,17 @@ class VhDevice{
 	// Enables high res mode
 	setHighRes( on = true ){
 
+		this.highRes = on;
+		return this;
+
+	}
+
+	refreshHighResBits(){
+
 		const hrb = this.getHiResBits();
 		this._maxVal = Math.pow(2, hrb)-1;
-		if( !hrb || !on )
-			this._maxVal = 255;			
-		return this;
+		if( !hrb || !this.highRes )
+			this._maxVal = 255;	
 
 	}
 	
@@ -437,6 +449,8 @@ class VhDevice{
 
 		if( typeof data.capabilities === "object" && data.capabilities )
 			this.capabilities = data.capabilities;	
+
+		this.refreshHighResBits();
 
 	}
 
@@ -588,7 +602,7 @@ class VhProgram{
 	constructor( ports, repeats = 0 ){
 
 		this.port = 0;
-		this.repeats = repeats > 0 ? parseInt(repeats) : 0;
+		this.repeats = repeats !== 0 ? parseInt(repeats) : 0;
 		this.stages = [];
 
 		this.setPorts(ports);
@@ -609,12 +623,14 @@ class VhProgram{
 		this.port = 0;
 		for( let port of ports ){
 			
-			if( port < 0 || port > 3 )
+			if( port < 0 || port >= 15 ) // We're sending 15 bits (16 bit signed). So a device can have max 15 ports.
 				continue;
 			port = Math.floor(port);
 			this.port = this.port | (1<<port);
 
 		}
+
+		return this;
 
 	}
 
@@ -624,16 +640,19 @@ class VhProgram{
 		for( let stage of [...args] )
 			this.stages.push(stage);
 
+		return this;
+
 	}
 
 	export( device ){
 
 		const out = {
-			stages : []
+			stages : [],
+			highres : device.isHighRes(),
 		};
 		if( this.port > 0 )
 			out.port = this.port;
-		if( this.repeats > 0 )
+		if( this.repeats !== 0 )
 			out.repeats = this.repeats;
 
 		if( !Array.isArray(this.stages) )
