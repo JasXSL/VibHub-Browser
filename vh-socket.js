@@ -26,9 +26,9 @@ class VhSocket{
 
 	}
 
-	onDeviceBattery( device ){
+	onDeviceBoardStatus( device ){
 
-		console.log("The device", device, "reports battery mV", device.batteryMillivolts, "and low voltage: ", device.batteryLow);
+		console.log("The device", device, "has had board data updated");
 
 	}
 
@@ -96,7 +96,7 @@ class VhSocket{
 			this.connected = false;
 			this.onDisconnected();
 		});
-		this.socket.on('sb', data => this.handleDeviceBattery(data));
+		this.socket.on('sb', data => this.handleDeviceBoardStatus(data));
 
 		await new Promise(res => {
 			this.socket.on('connect', res);
@@ -170,8 +170,8 @@ class VhSocket{
 
 		this.onDeviceOnline( device );
 
-		if( device.hasBatteryStatus() )
-			this.getBattery(device);
+		if( device.hasBoardStatus() )
+			this.getBoardStatus(device);
 
 	}
 
@@ -187,7 +187,7 @@ class VhSocket{
 
 	}
 
-	handleDeviceBattery( data ){
+	handleDeviceBoardStatus( data ){
 
 		const id = data.id;
 		let device = this.getDevice(id);
@@ -196,7 +196,8 @@ class VhSocket{
 		device.batteryLow = data.low;
 		device.batteryMillivolts = data.mv;
 		device.batteryMaxMillivolts = data.xv;
-		this.onDeviceBattery( device );
+		device.temperatureC = data.t;
+		this.onDeviceBoardStatus( device );
 
 	}
 
@@ -323,7 +324,7 @@ class VhSocket{
 		});
 
 	}
-	getBattery( device ){
+	getBoardStatus( device ){
 
 		this.socket.emit("gb", {
 			id : device.id,
@@ -380,7 +381,9 @@ class VhDevice{
 		ps : 'pwm specific',
 		ph : 'pwm specific high res',
 		vib : 'programs',
-		sb : 'battery status',
+		sb : 'board status',
+		temp : 'board temperature',
+		bat : 'battery status',
 		app_offline : 'offline capabilities',
 		dCustom : 'custom tasks',
 		aCustom : 'custom events',
@@ -402,6 +405,7 @@ class VhDevice{
 		this.batteryLow = false;
 		this.batteryMillivolts = 0;
 		this.batteryMaxMillivolts = 0;
+		this.temperatureC = 0;
 		this.numPorts = 0;
 		this.version = '';
 		this.custom = '';
@@ -493,8 +497,8 @@ class VhDevice{
 	hasCustomToApp(){
 		return this.capabilities.aCustom;
 	}
-	// Has battery level and low power output
-	hasBatteryStatus(){
+	// Has board status endpoint
+	hasBoardStatus(){
 		return this.capabilities.sb;
 	}
 	// Gets hi res cability bit size. Returns 0 if no high res capability is available
@@ -530,10 +534,8 @@ class VhDevice{
 	}
 
 	// Attempts to fetch battery status
-	getBattery(){
-
-		this._parent.getBattery( this );
-
+	getBoardStatus(){
+		this._parent.getBoardStatus( this );
 	}
 
 	// Checks if PWM has changed. If stash is true, it stashes changes detected 
