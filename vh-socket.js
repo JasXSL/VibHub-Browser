@@ -1,5 +1,5 @@
 /*
-	Copyright 2018-2021 JasX
+	Copyright 2018-2026 JasX
 	Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 	The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -193,10 +193,10 @@ class VhSocket{
 		let device = this.getDevice(id);
 		if( !device )
 			device = new VhDevice(id, this);	// It's asynchronous, so you can't rely on always having a device
-		device.batteryLow = data.low;
-		device.batteryMillivolts = data.mv;
-		device.batteryMaxMillivolts = data.xv;
-		device.temperatureC = data.t;
+		device.batteryLow = Boolean(data.low);
+		device.batteryMillivolts = parseInt(data.mv) || 0;
+		device.batteryMaxMillivolts = parseInt(data.xv) || 0;
+		device.temperatureC = +data.t || 0;
 		this.onDeviceBoardStatus( device );
 
 	}
@@ -420,6 +420,7 @@ class VhDevice{
 	setHighRes( on = true ){
 
 		this.highRes = on;
+		this.refreshHighResBits();
 		return this;
 
 	}
